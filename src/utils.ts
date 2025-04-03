@@ -161,7 +161,7 @@ export const createTokenOnSolana = async (
 
     await wallet.sendTransaction(transaction3, connection);
 
-    console.log("Minted!");
+    console.log("Token Minted!!!");
   } catch (error) {
     console.error("Error creating token:", error);
     alert(`Error creating token: ${String(error)}`);
