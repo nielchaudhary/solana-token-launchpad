@@ -1,10 +1,13 @@
 import { useWallet } from "@solana/wallet-adapter-react";
 import {useState} from 'react';
 import { createTokenOnSolana, handleStateChange, handleStateChangeNumber, isNullOrUndefined } from "../utils";
+import { useConnection } from "@solana/wallet-adapter-react";
 
 
 export const TokenLaunchpad = () => {
     const wallet = useWallet();
+    const { connection } = useConnection();
+
     const [tokenName, setTokenName] = useState('');
     const [tokenSymbol, setTokenSymbol] = useState('');
     const [tokenImage, setTokenImage] = useState('');
@@ -34,7 +37,7 @@ export const TokenLaunchpad = () => {
           <input className="inputText" type="number" placeholder="Enter Token Decimals" value={tokenDecimals} onChange={(e) => handleStateChangeNumber(e, setTokenDecimals)} /><br/>
 
           <button onClick={() => createTokenOnSolana(wallet,{
-            tokenName, tokenSymbol, tokenImage, tokenSupply, tokenDecimals})} className="btn">Create Token</button>
+            tokenName, tokenSymbol, tokenImage, tokenSupply, tokenDecimals}, connection)} className="btn">Create Token</button>
         </div>
     );
 };

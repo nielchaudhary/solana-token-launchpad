@@ -1,15 +1,21 @@
 import {
+  createInitializeMetadataPointerInstruction,
   createInitializeMintInstruction,
-  getMinimumBalanceForRentExemptMint,
+  ExtensionType,
+  LENGTH_SIZE,
   TOKEN_2022_PROGRAM_ID,
+  TYPE_SIZE,
+  createInitializeInstruction,
+  getMintLen,
+  getAssociatedTokenAddressSync,
+  createMintToInstruction,
+  createAssociatedTokenAccountInstruction,
 } from "@solana/spl-token";
+import { pack } from "@solana/spl-token-metadata";
 import { WalletContextState } from "@solana/wallet-adapter-react";
-import {
-  Connection,
-  Keypair,
-  SystemProgram,
-  Transaction,
-} from "@solana/web3.js";
+import { Connection } from "@solana/web3.js";
+
+import { Keypair, SystemProgram, Transaction } from "@solana/web3.js";
 
 export const isNullOrUndefined = (value: unknown) =>
   value === null || value === undefined;
@@ -46,54 +52,66 @@ export const createTokenOnSolana = async (
     tokenImage: string;
     tokenDecimals: number;
     tokenSupply: number;
-  }
+  },
+  connection: Connection
 ) => {
-  if (!wallet || !wallet.connected) {
+  if (!wallet || !wallet.connected || !wallet.publicKey) {
     alert("Please connect your wallet first!");
     return;
   }
 
-  if (!wallet.publicKey) {
-    alert("Wallet public key not available!");
-    return;
-  }
-
   try {
-    // Establish connection to Solana devnet
-    const connection = new Connection(
-      "https://api.devnet.solana.com",
-      "confirmed"
-    );
-
-    // Generate a new keypair for the mint account
     const mintAccountKeypair = Keypair.generate();
 
-    // Calculate rent exemption for the mint account
-    const lamports = await getMinimumBalanceForRentExemptMint(connection);
+    const mintLen = getMintLen([ExtensionType.MetadataPointer]);
+    const metadata = {
+      mint: mintAccountKeypair.publicKey,
+      name: tokenData.tokenName,
+      symbol: tokenData.tokenSymbol,
+      uri: tokenData.tokenImage,
+      additionalMetadata: [],
+    };
 
-    // Create a transaction object
+    const metadataLen = TYPE_SIZE + LENGTH_SIZE + pack(metadata).length;
+
+    const lamports = await connection.getMinimumBalanceForRentExemption(
+      mintLen + metadataLen
+    );
+
     const transaction = new Transaction();
 
-    // Step 1: Create the mint account
+    // Create mint account with extra space
     transaction.add(
       SystemProgram.createAccount({
         fromPubkey: wallet.publicKey,
         newAccountPubkey: mintAccountKeypair.publicKey,
-        lamports, // Rent exemption amount
-        space: 82, // Mint account size
-        programId: TOKEN_2022_PROGRAM_ID, // SPL Token program ID
-      })
-    );
-
-    // Step 2: Initialize the mint account
-    transaction.add(
+        lamports,
+        space: mintLen,
+        programId: TOKEN_2022_PROGRAM_ID,
+      }),
+      createInitializeMetadataPointerInstruction(
+        mintAccountKeypair.publicKey,
+        wallet.publicKey,
+        mintAccountKeypair.publicKey,
+        TOKEN_2022_PROGRAM_ID
+      ),
       createInitializeMintInstruction(
-        mintAccountKeypair.publicKey, // Mint address
-        tokenData.tokenDecimals, // Number of decimals
-        wallet.publicKey, // Mint authority (wallet)
-        null, // Freeze authority (optional)
-        TOKEN_2022_PROGRAM_ID // SPL Token program ID
-      )
+        mintAccountKeypair.publicKey,
+        9,
+        wallet.publicKey,
+        null,
+        TOKEN_2022_PROGRAM_ID
+      ),
+      createInitializeInstruction({
+        programId: TOKEN_2022_PROGRAM_ID,
+        mint: mintAccountKeypair.publicKey,
+        metadata: mintAccountKeypair.publicKey,
+        name: tokenData.tokenName,
+        symbol: tokenData.tokenSymbol,
+        uri: tokenData.tokenImage,
+        mintAuthority: wallet.publicKey,
+        updateAuthority: wallet.publicKey,
+      })
     );
 
     transaction.feePayer = wallet.publicKey;
@@ -101,35 +119,52 @@ export const createTokenOnSolana = async (
     const { blockhash } = await connection.getLatestBlockhash();
     transaction.recentBlockhash = blockhash;
 
-    // Partially sign the transaction with the mint account keypair
     transaction.partialSign(mintAccountKeypair);
 
-    // Sign the transaction with the wallet
     if (!wallet.signTransaction) {
       throw new Error("Wallet doesn't support signTransaction");
     }
 
-    const signedTransaction = await wallet.signTransaction(transaction);
+    await wallet.sendTransaction(transaction, connection);
 
-    // Send the signed transaction to the blockchain
-    const signature = await connection.sendRawTransaction(
-      signedTransaction.serialize(),
-      { skipPreflight: true }
+    const createdToken = getAssociatedTokenAddressSync(
+      mintAccountKeypair.publicKey,
+      wallet.publicKey,
+      false,
+      TOKEN_2022_PROGRAM_ID
     );
 
-    await connection.confirmTransaction(signature, "confirmed");
+    console.log(createdToken.toBase58());
 
-    console.log({
-      mintAddress: mintAccountKeypair.publicKey.toBase58(),
-      txnSignature: signature,
-    });
+    const transaction2 = new Transaction().add(
+      createAssociatedTokenAccountInstruction(
+        wallet.publicKey,
+        createdToken,
+        wallet.publicKey,
+        mintAccountKeypair.publicKey,
+        TOKEN_2022_PROGRAM_ID
+      )
+    );
 
-    return { signature, mintAddress: mintAccountKeypair.publicKey.toBase58() };
+    await wallet.sendTransaction(transaction2, connection);
+
+    const transaction3 = new Transaction().add(
+      createMintToInstruction(
+        mintAccountKeypair.publicKey,
+        createdToken,
+        wallet.publicKey,
+        1000000000,
+        [],
+        TOKEN_2022_PROGRAM_ID
+      )
+    );
+
+    await wallet.sendTransaction(transaction3, connection);
+
+    console.log("Minted!");
   } catch (error) {
     console.error("Error creating token:", error);
-
     alert(`Error creating token: ${String(error)}`);
-
     return null;
   }
 };
