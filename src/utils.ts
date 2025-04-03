@@ -1,14 +1,12 @@
-import { Metaplex, walletAdapterIdentity } from "@metaplex-foundation/js";
 import {
-  getMinimumBalanceForRentExemptAccount,
-  MINT_SIZE,
+  createInitializeMintInstruction,
+  getMinimumBalanceForRentExemptMint,
   TOKEN_2022_PROGRAM_ID,
 } from "@solana/spl-token";
 import { WalletContextState } from "@solana/wallet-adapter-react";
 import {
   Connection,
   Keypair,
-  PublicKey,
   SystemProgram,
   Transaction,
 } from "@solana/web3.js";
@@ -40,9 +38,15 @@ export const handleStateChangeNumber = (
   state(Number(e.target.value));
 };
 
-export const createToken = async (
+export const createTokenOnSolana = async (
   wallet: WalletContextState,
-  tokenData: TokenData
+  tokenData: {
+    tokenName: string;
+    tokenSymbol: string;
+    tokenImage: string;
+    tokenDecimals: number;
+    tokenSupply: number;
+  }
 ) => {
   if (!wallet || !wallet.connected) {
     alert("Please connect your wallet first!");
@@ -55,57 +59,77 @@ export const createToken = async (
   }
 
   try {
-    // Create a keypair for the mint account
+    // Establish connection to Solana devnet
     const connection = new Connection(
       "https://api.devnet.solana.com",
       "confirmed"
     );
-    const keypair = Keypair.generate();
-    const lamports = await getMinimumBalanceForRentExemptAccount(connection);
 
-    const metaplex = Metaplex.make(connection).use(
-      walletAdapterIdentity(wallet)
-    );
+    // Generate a new keypair for the mint account
+    const mintAccountKeypair = Keypair.generate();
 
-    // Create the mint transaction
-    const transaction = new Transaction().add(
+    // Calculate rent exemption for the mint account
+    const lamports = await getMinimumBalanceForRentExemptMint(connection);
+
+    // Create a transaction object
+    const transaction = new Transaction();
+
+    // Step 1: Create the mint account
+    transaction.add(
       SystemProgram.createAccount({
         fromPubkey: wallet.publicKey,
-        newAccountPubkey: new PublicKey(keypair.publicKey),
-        lamports,
-        space: MINT_SIZE,
-        programId: TOKEN_2022_PROGRAM_ID,
+        newAccountPubkey: mintAccountKeypair.publicKey,
+        lamports, // Rent exemption amount
+        space: 82, // Mint account size
+        programId: TOKEN_2022_PROGRAM_ID, // SPL Token program ID
       })
     );
 
-    transaction.recentBlockhash = (
-      await connection.getLatestBlockhash()
-    ).blockhash;
+    // Step 2: Initialize the mint account
+    transaction.add(
+      createInitializeMintInstruction(
+        mintAccountKeypair.publicKey, // Mint address
+        tokenData.tokenDecimals, // Number of decimals
+        wallet.publicKey, // Mint authority (wallet)
+        null, // Freeze authority (optional)
+        TOKEN_2022_PROGRAM_ID // SPL Token program ID
+      )
+    );
+
     transaction.feePayer = wallet.publicKey;
 
-    // Partially sign with mint account keypair
-    transaction.partialSign(keypair);
+    const { blockhash } = await connection.getLatestBlockhash();
+    transaction.recentBlockhash = blockhash;
 
-    // Sign with wallet
+    // Partially sign the transaction with the mint account keypair
+    transaction.partialSign(mintAccountKeypair);
+
+    // Sign the transaction with the wallet
     if (!wallet.signTransaction) {
       throw new Error("Wallet doesn't support signTransaction");
     }
 
     const signedTransaction = await wallet.signTransaction(transaction);
 
-    // Send transaction to Solana blockchain
+    // Send the signed transaction to the blockchain
     const signature = await connection.sendRawTransaction(
-      signedTransaction.serialize()
+      signedTransaction.serialize(),
+      { skipPreflight: true }
     );
-    await connection.confirmTransaction(signature);
 
-    alert(`Token created successfully! Transaction Signature: ${signature}`);
+    await connection.confirmTransaction(signature, "confirmed");
+
+    console.log({
+      mintAddress: mintAccountKeypair.publicKey.toBase58(),
+      txnSignature: signature,
+    });
+
+    return { signature, mintAddress: mintAccountKeypair.publicKey.toBase58() };
   } catch (error) {
     console.error("Error creating token:", error);
-    alert(
-      `Error creating token: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
+
+    alert(`Error creating token: ${String(error)}`);
+
+    return null;
   }
 };
