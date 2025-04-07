@@ -1,7 +1,8 @@
 import { useWallet } from "@solana/wallet-adapter-react";
 import {useState} from 'react';
-import { createTokenOnSolana, handleStateChange, handleStateChangeNumber, isNullOrUndefined } from "../utils";
+import {  handleStateChange, handleStateChangeNumber, isNullOrUndefined } from "../utils/data-helpers";
 import { useConnection } from "@solana/wallet-adapter-react";
+import { createTokenOnSolana } from "../utils/createToken";
 
 
 export const TokenLaunchpad = () => {

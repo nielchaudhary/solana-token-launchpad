@@ -1,5 +1,4 @@
 import {
-  createInitializeMetadataPointerInstruction,
   createInitializeMintInstruction,
   ExtensionType,
   LENGTH_SIZE,
@@ -10,39 +9,18 @@ import {
   getAssociatedTokenAddressSync,
   createMintToInstruction,
   createAssociatedTokenAccountInstruction,
+  createInitializeMetadataPointerInstruction,
 } from "@solana/spl-token";
 import { pack } from "@solana/spl-token-metadata";
 import { WalletContextState } from "@solana/wallet-adapter-react";
 import { Connection } from "@solana/web3.js";
 
 import { Keypair, SystemProgram, Transaction } from "@solana/web3.js";
-
-export const isNullOrUndefined = (value: unknown) =>
-  value === null || value === undefined;
-
-export const notNullOrUndefined = (value: unknown) => !isNullOrUndefined(value);
-
-export interface TokenData {
-  tokenName: string;
-  tokenSymbol: string;
-  tokenImage: string;
-  tokenSupply: number;
-  tokenDecimals: number;
-}
-
-export const handleStateChange = (
-  e: React.ChangeEvent<HTMLInputElement>,
-  state: (value: string) => void
-) => {
-  state(e.target.value);
-};
-
-export const handleStateChangeNumber = (
-  e: React.ChangeEvent<HTMLInputElement>,
-  state: (value: number) => void
-) => {
-  state(Number(e.target.value));
-};
+import {
+  fetchIPFSMetadataFromPinata,
+  IPFSMetadata,
+  uploadMetadataToPinata,
+} from "./ipfs";
 
 export const createTokenOnSolana = async (
   wallet: WalletContextState,
@@ -64,13 +42,29 @@ export const createTokenOnSolana = async (
     const mintAccountKeypair = Keypair.generate();
 
     const mintLen = getMintLen([ExtensionType.MetadataPointer]);
-    const metadata = {
-      mint: mintAccountKeypair.publicKey,
+
+    const metadata: IPFSMetadata = {
       name: tokenData.tokenName,
+      mint: mintAccountKeypair.publicKey,
       symbol: tokenData.tokenSymbol,
       uri: tokenData.tokenImage,
       additionalMetadata: [],
     };
+
+    //upload the metadata to an IPFS to retrieve whenever needed
+    const metadataCID = await uploadMetadataToPinata(metadata);
+    if (!metadataCID) {
+      alert("Failed to upload token metadata");
+      return;
+    }
+
+    console.log({ metadataCID: metadataCID.cid });
+
+    const ipfsMetadata = await fetchIPFSMetadataFromPinata(metadataCID.cid);
+    if (!ipfsMetadata) {
+      alert("Failed to fetch token metadata");
+      return;
+    }
 
     const metadataLen = TYPE_SIZE + LENGTH_SIZE + pack(metadata).length;
 
@@ -108,7 +102,7 @@ export const createTokenOnSolana = async (
         metadata: mintAccountKeypair.publicKey,
         name: tokenData.tokenName,
         symbol: tokenData.tokenSymbol,
-        uri: tokenData.tokenImage,
+        uri: ipfsMetadata.uri,
         mintAuthority: wallet.publicKey,
         updateAuthority: wallet.publicKey,
       })
@@ -160,6 +154,9 @@ export const createTokenOnSolana = async (
     );
 
     await wallet.sendTransaction(transaction3, connection);
+
+    const ataBalance = await connection.getTokenAccountBalance(createdToken);
+    console.log(ataBalance.value.amount);
 
     console.log("Token Minted!!!");
   } catch (error) {
